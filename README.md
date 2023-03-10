@@ -1,42 +1,58 @@
-# Template for short-and-sweet lightning talks
+---
+marp: true
+title: Quarkus Insights #123
+description: Quarkus Insights #123
+theme: uncover
+paginate: true
+_paginate: false
 
-## Inspiration/background
+---
 
-* https://www.chessable.com/chess-openings/s/short%20sweet
-* https://en.wikipedia.org/wiki/Lightning_talk
+# Quarkus Insights #123
 
-## Why
+## 10 reasons to convert you to subatomic side of force
 
-**If** you want to 
+---
 
-* share a use-case/problem solution from your project
-* share experience with a technology/tool/framework
-* dive (deeper) into new topics
-* learn by doing
+# Intro, reason & background
 
-**then** a lightning talk is what you need!
+Deploying/testing new code version requires rebuild of whole application which (depending on the application size) might take from 1 coffee to a 3-course dinner.
 
-The goal of the short-and-sweet talk is not to provide an extensive teach-in experience - it's about knowledge sharing and inspiration to dive deeper later.
+---
 
-## What
+# Intro, reason & background (contd.)
 
-* slides (Markdown/AsciiDoc)
-  * you might want to use Marp (https://marpit.marp.app) in VSCode + Marp extension
-    * see also https://github.com/yhatt/marp-cli-example
-* code
-* script/helper snippers to speed up the demo
+* Tomcat/ OSGi
+* Grails (slow reload)
+* Play! Framework on Java (awesome!)
+* Weblogic (project build and redeploy time >30 mins)
+* Spring Boot (live reload + devtools had to be added)
+* Payara
+* __Quarkus (reload on next request)__
 
+---
 
-## When
+# Demo
 
-TBD, most probably at lunch time aka 'Brown Bag Meeting' - simply announce and/or book the next available slot.
+* Hot-code replace/ live reload
+* Docker & native image
+* Kubernetes
+* Remote live reload
 
-Overall duration should be around 15-30 mins to reserve enough time to come to the meat of the talk **and** to have 5-10 mins for Q&A
+---
 
-## How
+# Demo (contd.)
 
-* prepare the [What](##What)
-  * based on this template
-  * let https://github.com/OpenValue-D fork it
-* book the [When](##When)
-* and have fun
+* Reactive messaging
+* Devservices & reactive JPA
+* Testing
+* Dev UI
+
+--- 
+
+# DIY
+
+* https://quarkus.io/guides/
+* https://smallrye.io/projects/
+* https://github.com/database-rider/database-rider
+    * https://github.com/coiouhkc/short-and-sweet-database-rider-intro

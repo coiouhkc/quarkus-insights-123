@@ -1,0 +1,438 @@
+# Table of contents
+1. [Environment setup](#env)
+2. [First app & hot code replacement](#hot-code)
+3. [Containerizing and native image](#docker-native)
+4. [Kubernetes](#kubernetes)
+5. [Putting it all together](#remote-dev)
+6. [Reactive messaging](#reactive-messaging)
+7. [Devservices with reactive JPA](#devservices-reactive-jpa)
+8. [Testing](#testing)
+
+## Environment setup <a id="env"></a>
+
+Use `sdkman`!
+
+```
+sdk use java 17.0.4.1-zulu
+sdk use maven 3.8.7
+```
+
+## First app & hot code replacement <a id="hot-code"></a>
+
+Let's create the app using CLI:
+
+```
+quarkus create app org.abratuhi.quarkus:demo-hot-code
+cd demo-hot-code
+quarkus dev
+```
+
+Check the auto-generated endpoint using cURL:
+
+`curl http://localhost:8080/hello`
+
+Open `GreetingResource` and add `from Quarkus Insights`.
+
+Check the reply from Quarkus again (reload on request!):
+
+`curl http://localhost:8080/hello`
+
+Add `@ConfigProperty` to `GreetingResource` 
+
+```
+@ConfigProperty(name = "greeting", defaultValue = "Default hi")
+String greeting;
+
+@GET
+@Produces(MediaType.TEXT_PLAIN)
+public String hello() {
+return greeting;
+}
+```
+
+and add custom message to `application.properties`:
+
+```
+greeting=Hello Max!
+```
+
+Check the reply from Quarkus again:
+
+```
+curl localhost:8080/hello
+```
+
+Force restart the application, press `h`, then `s`.
+
+## Containerizing and native image <a id="docker-native"></a>
+
+Let's create the app using CLI:
+
+```
+quarkus create app org.abratuhi.quarkus:demo-docker-native --extensions=quarkus-resteasy-reactive,container-image-jib
+cd demo-docker-native
+```
+
+Adjust `application.properties` to build Docker image and build:
+```
+quarkus.container-image.build=true
+mvn clean package
+```
+
+List local Docker images:
+
+```
+docker images | grep -i demo-docker-native
+```
+
+Now increase the version, adjust `application.properties`, build the native image (GraalVM) and compare the sizes and startup times:
+
+```
+mvn versions:set -DnewVersion=1.0.1-SNAPSHOT
+echo "quarkus.native.container-build=true" >> src/main/resources/application.properties
+mvn clean package -Pnative
+docker images | grep -i demo-docker-native
+```
+
+
+
+## Kubernetes <a id="kubernetes"></a>
+Let's create the app using CLI:
+
+```
+quarkus create app org.abratuhi.quarkus:demo-kubernetes --extensions=quarkus-resteasy-reactive,container-image-jib,kubernetes
+cd demo-kubernetes
+```
+
+Adjust `application.properties` to push to docker registry of local kubernetes (`microk8s status | grep registry`)
+
+```
+quarkus.container-image.push=true
+quarkus.container-image.insecure=true
+quarkus.container-image.registry=localhost:32000
+```
+
+Build the image and generate kubernetes deployment descriptors:
+```
+mvn clean package
+```
+
+Test that application is not yet deployed:
+```
+kubectl get pods
+```
+
+Deploy
+```
+kubectl create -f target/kubernetes/kubernetes.yml
+```
+
+Check the pod
+```
+kubectl get pods
+```
+
+Configure port-forwarding in separate tab/pane
+```
+kubectl port-forward svc/demo-kubernetes 9090:80
+```
+
+Test the endpoint
+```
+curl localhost:9090/hello -o -
+```
+
+## Putting it all together <a id="remote-dev"></a>
+Remote dev allows for developing directly in the cloud!
+
+Create the app using CLI:
+
+```
+quarkus create app org.abratuhi.quarkus:demo-kubernetes --extensions=quarkus-resteasy-reactive,container-image-jib,kubernetes
+cd demo-kubernetes
+```
+
+Adjust `application.properties` to push to docker registry of local kubernetes (`microk8s status | grep registry`)
+
+```
+quarkus.container-image.push=true
+quarkus.container-image.insecure=true
+quarkus.container-image.registry=localhost:32000
+```
+
+Adjust `application.properties` allow remote dev
+
+```
+quarkus.package.type=mutable-jar
+quarkus.live-reload.password=changeit
+quarkus.live-reload.url=http://localhost:9090
+```
+
+Build the image and generate kubernetes deployment descriptors:
+```
+mvn clean package
+```
+
+Adjust `target/kubernetes/kubernetes.yml` to start container pod in dev mode:
+```
+QUARKUS_LAUNCH_DEVMODE=true
+```
+
+```
+- env:
+    - name: QUARKUS_LAUNCH_DEVMODE
+      value: "true"
+```
+
+Deploy
+```
+kubectl create -f target/kubernetes/kubernetes.yml
+```
+
+Configure port-forwarding in separate tab/pane
+```
+kubectl port-forward svc/demo-kubernetes 9090:80
+```
+
+Test the endpoint
+```
+curl localhost:9090/hello -o -
+```
+
+Change greeting text in `GreetingResource` and test the endpoint again
+```
+curl localhost:9090/hello -o -
+```
+
+## Reactive messaging <a id="reactive-messaging"></a>
+SmallRye reactive messaging allows for seamlessly connecting sources and sinks of different types/ techs!
+
+Create app
+```
+quarkus create app org.abratuhi.quarkus:demo-reactive-messaging --extensions=quarkus-smallrye-reactive-messaging-kafka,quarkus-smallrye-reactive-messaging-mqtt
+cd demo-reactive-messaging
+```
+
+Create "transformer" which doubles the string
+
+```
+import io.smallrye.reactive.messaging.kafka.Record;
+import lombok.extern.jbosslog.JBossLog;
+import org.eclipse.microprofile.reactive.messaging.Incoming;
+import org.eclipse.microprofile.reactive.messaging.Outgoing;
+
+import javax.enterprise.context.ApplicationScoped;
+
+@JBossLog
+@ApplicationScoped
+public class SmartMeterValueDoublingProcessor {
+    @Incoming("string-in")
+    @Outgoing("string-out")
+    public Record<String, String> x2(byte[] bytes) {
+        String str = new String(bytes);
+
+        return Record.of(str, str + str);
+    }
+}
+```
+
+Configure the connectors in `application.properties`
+```
+mp.messaging.incoming.string-in.connector=smallrye-mqtt
+mp.messaging.incoming.string-in.topic=string-in
+mp.messaging.incoming.string-in.host=localhost
+mp.messaging.incoming.string-in.port=1883
+mp.messaging.incoming.string-in.auto-generated-client-id=true
+
+kafka.bootstrap.servers=localhost:9092
+
+mp.messaging.outgoing.string-out.connector=smallrye-kafka
+mp.messaging.outgoing.string-out.topic=string-out
+
+quarkus.devservices.enabled=false
+```
+
+Prepare `src/main/docker-compose/docker-compose.yml`
+```
+version: '3'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    ports:
+      - "9092:9092"
+      - "9096:9096"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9096
+    links:
+      - zookeeper
+
+  mosquitto:
+    image: eclipse-mosquitto:1.6.15 # starting with 1.7 the remote connect is disabled by default
+    ports:
+      - "1883:1883"
+```
+
+Start docker compose
+```
+docker-compose up -d
+```
+
+Start listening to Kafka topic
+```
+docker exec -ti docker-compose_kafka_1 /bin/bash
+kafka-console-consumer --bootstrap-server localhost:9092 --topic string-out
+```
+
+Publish message in Mosquitto
+```
+docker exec -ti docker-compose_mosquitto_1 /bin/sh
+mosquitto_pub -t string-in -m hello
+```
+
+Tear down required docker
+```
+docker-compose down
+```
+
+## Devservices (and reactive JPA) <a id="devservices-reactive-jpa"></a>
+Would not it be nice not to have to write and bootstrap docker(-compose) manually?
+
+Meet Devservices!
+
+Create app
+```
+quarkus create app org.abratuhi.quarkus:demo-devservice-and-reactive-jpa --extensions=quarkus-resteasy-reactive,quarkus-resteasy-reactive-jackson,quarkus-hibernate-reactive-panache,quarkus-reactive-pg-client
+cd demo-devservice-and-reactive-jpa
+```
+
+Add simple reactive endpoint serving entities from database (Postgres)
+```
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import javax.persistence.Column;
+import javax.persistence.Entity;
+import javax.persistence.GeneratedValue;
+import javax.persistence.Id;
+
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder(toBuilder = true)
+@Data
+@Entity
+public class Todo {
+    @Id
+    @GeneratedValue
+    private Long id;
+
+    @Column(name = "text")
+    private String text;
+}
+```
+
+```
+import io.quarkus.hibernate.reactive.panache.PanacheRepository;
+
+import javax.enterprise.context.ApplicationScoped;
+
+@ApplicationScoped
+public class TodoRepository implements PanacheRepository<Todo> {
+}
+
+```
+
+```
+import io.smallrye.mutiny.Uni;
+import lombok.extern.jbosslog.JBossLog;
+
+import javax.inject.Inject;
+import javax.ws.rs.GET;
+import javax.ws.rs.Path;
+import javax.ws.rs.Produces;
+import javax.ws.rs.core.MediaType;
+import java.util.List;
+import java.util.stream.Collectors;
+
+@JBossLog
+@Path("/todo")
+public class TodoResource {
+
+    @Inject
+    TodoRepository todoRepository;
+
+    @GET
+    @Produces(MediaType.TEXT_PLAIN)
+    public Uni<List<String>> getAll() {
+       Uni<List<Todo>> todos = todoRepository.listAll();
+
+       log.info("'Fetched' todos"); // <---- comes before Hibernate log
+
+       return todos.map(it ->
+                        it.stream()
+                                .map(Todo::getText)
+                                .collect(Collectors.toList())
+                );
+    }
+}
+```
+
+Enable Devservices for Postgres in `application.properties`
+```
+quarkus.datasource.devservices.enabled=true
+quarkus.datasource.devservices.username=postgres
+quarkus.datasource.devservices.password=postgres
+quarkus.datasource.devservices.port=5432
+
+quarkus.datasource.db-kind=postgresql
+quarkus.datasource.username=${quarkus.datasource.devservices.username}
+quarkus.datasource.password=${quarkus.datasource.devservices.password}
+quarkus.datasource.reactive.url=vertx-reactive:postgresql://localhost:${quarkus.datasource.devservices.port}/postgres
+
+quarkus.hibernate-orm.database.generation=drop-and-create
+quarkus.hibernate-orm.log.sql=true
+quarkus.hibernate-orm.sql-load-script=import.sql
+```
+
+Provide initial seed `src/main/resources/import.sql`
+```
+INSERT INTO todo(id, text) VALUES (nextval('hibernate_sequence'), 'Finalize Quarkus Demo');
+INSERT INTO todo(id, text) VALUES (nextval('hibernate_sequence'), 'Promote Quarkus Demo @ next Quarkus Con');
+```
+
+## Testing <a id="testing"></a>
+The first paragraph text
+
+
+####
+
+
+quarkus create app --stream=3.0
+
+jbang --fresh upgrade-to-quarkus3@quarkusio
+
+
+Lombok dependency
+```
+<dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <version>1.18.24</version>
+    </dependency>
+```
