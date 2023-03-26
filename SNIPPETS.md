@@ -3,7 +3,7 @@
 2. [First app & hot code replacement](#hot-code)
 3. [Containerizing and native image](#docker-native)
 4. [Kubernetes](#kubernetes)
-5. [Putting it all together](#remote-dev)
+5. [Putting it all together = Remote-Dev](#remote-dev)
 6. [Reactive messaging](#reactive-messaging)
 7. [Devservices with reactive JPA](#devservices-reactive-jpa)
 8. [Testing](#testing)
@@ -85,6 +85,11 @@ List local Docker images:
 docker images | grep -i demo-docker-native
 ```
 
+Run application in Docker:
+```
+docker run --rm -p 8080:8080 bratuhia/demo-docker-native:1.0.0-SNAPSHOT
+```
+
 Now increase the version, adjust `application.properties`, build the native image (GraalVM) and compare the sizes and startup times:
 
 ```
@@ -94,6 +99,11 @@ mvn clean package -Pnative
 docker images | grep -i demo-docker-native
 ```
 
+Run application in Docker again:
+```
+docker run --rm -p 8080:8080 bratuhia/demo-docker-native:1.0.1-SNAPSHOT
+```
+observe the difference in startup times.
 
 
 ## Kubernetes <a id="kubernetes"></a>
@@ -115,6 +125,14 @@ quarkus.container-image.registry=localhost:32000
 Build the image and generate kubernetes deployment descriptors:
 ```
 mvn clean package
+```
+
+Adjust resource definitions in `target/kubernetes/kubernetes.yml`, if necessary
+```
+resources:
+  limits:
+    memory: 256Mi
+    cpu: 250m
 ```
 
 Test that application is not yet deployed:
@@ -148,8 +166,8 @@ Remote dev allows for developing directly in the cloud!
 Create the app using CLI:
 
 ```
-quarkus create app org.abratuhi.quarkus:demo-kubernetes --extensions=quarkus-resteasy-reactive,container-image-jib,kubernetes
-cd demo-kubernetes
+quarkus create app org.abratuhi.quarkus:demo-remote-dev --extensions=quarkus-resteasy-reactive,container-image-jib,kubernetes
+cd demo-remote-dev
 ```
 
 Adjust `application.properties` to push to docker registry of local kubernetes (`microk8s status | grep registry`)
@@ -191,12 +209,17 @@ kubectl create -f target/kubernetes/kubernetes.yml
 
 Configure port-forwarding in separate tab/pane
 ```
-kubectl port-forward svc/demo-kubernetes 9090:80
+kubectl port-forward svc/demo-remote-dev 9090:80
 ```
 
 Test the endpoint
 ```
 curl localhost:9090/hello -o -
+```
+
+Start the Quarkus application in remote dev mode:
+```
+mvn quarkus:remote-dev
 ```
 
 Change greeting text in `GreetingResource` and test the endpoint again
@@ -416,6 +439,16 @@ INSERT INTO todo(id, text) VALUES (nextval('hibernate_sequence'), 'Finalize Quar
 INSERT INTO todo(id, text) VALUES (nextval('hibernate_sequence'), 'Promote Quarkus Demo @ next Quarkus Con');
 ```
 
+Start the application, note the output related to Docker:
+```
+mvn quarkus:dev
+```
+
+Check running docker containers:
+```
+docker ps -a
+```
+
 ## Testing <a id="testing"></a>
 Create app
 ```
@@ -472,7 +505,12 @@ Update `pom.xml` to include sshj and testcontainers
     <artifactId>sshj</artifactId>
     <version>0.34.0</version>
   </dependency>
-
+<dependency>
+  <groupId>org.assertj</groupId>
+  <artifactId>assertj-core</artifactId>
+  <version>3.23.1</version>
+  <scope>test</scope>
+  </dependency>
 <dependency>
     <groupId>org.testcontainers</groupId>
     <artifactId>testcontainers</artifactId>
@@ -509,7 +547,7 @@ public class SftpResource {
         SFTPClient sftp = sshClient.newSFTPClient()
     ) {
 
-      sftp.put("src/test/resources/.zshrc", "upload/.zshrc");
+      sftp.put("src/main/resources/.zshrc", "upload/.zshrc");
 
       return Response
           .created(URI.create("/"))
@@ -522,7 +560,7 @@ public class SftpResource {
 }
 ```
 
-Add the (empty) static file `.zshrc` to `src/test/resources`
+Add the (empty) static file `.zshrc` to `src/main/resources`
 
 Create the test first
 ```
@@ -657,6 +695,11 @@ public class SftpTestProfile implements QuarkusTestProfile {
   @Override
   public List<TestResourceEntry> testResources() {
     return List.of(new TestResourceEntry(SftpTestResource.class));
+  }
+
+  @Override
+  public boolean disableGlobalTestResources() {
+    return true;
   }
 }
 ```
