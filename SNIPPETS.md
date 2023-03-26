@@ -417,8 +417,249 @@ INSERT INTO todo(id, text) VALUES (nextval('hibernate_sequence'), 'Promote Quark
 ```
 
 ## Testing <a id="testing"></a>
-The first paragraph text
+Create app
+```
+quarkus create app org.abratuhi.quarkus:demo-testing
+cd demo-testing
+```
 
+Add `SshClientFactory`
+```
+import lombok.SneakyThrows;
+import net.schmizz.sshj.SSHClient;
+import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+
+import javax.enterprise.context.Dependent;
+
+@Dependent
+public class SshClientFactory {
+    @ConfigProperty(name = "app.sftp.host")
+    String sftpHost;
+
+    @ConfigProperty(name = "app.sftp.port")
+    Integer sftpPort;
+
+    @ConfigProperty(name = "app.sftp.user")
+    String sftpUser;
+
+    @ConfigProperty(name = "app.sftp.password")
+    String sftpPassword;
+
+    @SneakyThrows
+    public SSHClient getClient() {
+        SSHClient client = new SSHClient();
+        client.addHostKeyVerifier(new PromiscuousVerifier());
+        client.connect(sftpHost, sftpPort);
+        client.authPassword(sftpUser, sftpPassword);
+        return client;
+    }
+}
+```
+
+Add necessary configuration to `application.properties`
+```
+app.sftp.host=localhost
+app.sftp.port=2222
+app.sftp.user=foo
+app.sftp.password=bar
+```
+
+Update `pom.xml` to include sshj and testcontainers
+```
+<dependency>
+    <groupId>com.hierynomus</groupId>
+    <artifactId>sshj</artifactId>
+    <version>0.34.0</version>
+  </dependency>
+
+<dependency>
+    <groupId>org.testcontainers</groupId>
+    <artifactId>testcontainers</artifactId>
+    <version>1.17.4</version>
+    <scope>test</scope>
+  </dependency>
+```
+
+Create `SftpResource` which uploads a predefined file
+
+```
+
+import lombok.extern.jbosslog.JBossLog;
+import net.schmizz.sshj.SSHClient;
+import net.schmizz.sshj.sftp.SFTPClient;
+
+import javax.inject.Inject;
+import javax.ws.rs.POST;
+import javax.ws.rs.Path;
+import javax.ws.rs.core.Response;
+import java.net.URI;
+
+@JBossLog
+@Path("/sftp")
+public class SftpResource {
+
+  @Inject
+  SshClientFactory sshClientFactory;
+
+  @POST
+  public Response create() {
+    try (
+        SSHClient sshClient = sshClientFactory.getClient();
+        SFTPClient sftp = sshClient.newSFTPClient()
+    ) {
+
+      sftp.put("src/test/resources/.zshrc", "upload/.zshrc");
+
+      return Response
+          .created(URI.create("/"))
+          .build();
+    } catch (Exception e) {
+      log.error(e);
+      return Response.serverError().build();
+    }
+  }
+}
+```
+
+Add the (empty) static file `.zshrc` to `src/test/resources`
+
+Create the test first
+```
+import io.quarkus.test.common.QuarkusTestResource;
+import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.junit.TestProfile;
+import lombok.extern.jbosslog.JBossLog;
+import net.schmizz.sshj.SSHClient;
+import net.schmizz.sshj.sftp.SFTPClient;
+import org.apache.http.HttpStatus;
+import org.junit.jupiter.api.Test;
+
+import javax.inject.Inject;
+
+import java.io.IOException;
+
+import static io.restassured.RestAssured.given;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
+
+@JBossLog
+@QuarkusTest
+//@QuarkusTestResource(SftpTestResource.class)
+//@TestProfile(SftpTestProfile.class)
+public class SftpResourceTest {
+  @Inject
+  SshClientFactory sshClientFactory;
+
+  @Test
+  void fileIsUploaded() {
+    try (
+        SSHClient sshClient = sshClientFactory.getClient();
+        SFTPClient sftp = sshClient.newSFTPClient()
+    ) {
+      // precondition/ pre-assert
+      assertThat(sftp.ls("upload")).hasSize(0);
+
+      // action
+      given()
+          .when().post("/sftp")
+          .then()
+          .statusCode(HttpStatus.SC_CREATED);
+
+      // postcondition/ assert
+      assertThat(sftp.ls("upload")).hasSize(1);
+      assertThat(sftp.ls("upload").get(0).getName()).contains(".zshrc");
+
+      log.info(sftp.ls("upload"));
+
+    } catch (IOException e) {
+      fail("Something wrong happened", e);
+    }
+  }
+}
+```
+
+It fails, since no SFTP server is running.
+
+Let's correct it by adding a `TestResource` to help test the app
+```
+import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
+
+import java.util.Map;
+
+public class SftpTestResource implements QuarkusTestResourceLifecycleManager {
+  private GenericContainer<?> sftp;
+
+  @Override
+  public Map<String, String> start() {
+    sftp = new GenericContainer<>("atmoz/sftp:alpine")
+        .withExposedPorts(22)
+        .withCommand("foo:bar:1001::upload")
+        .waitingFor(Wait.forListeningPort());
+    sftp.start();
+
+    String mappedHost = "localhost";
+    String mappedPort = String.valueOf(sftp.getMappedPort(22));
+    String mappedUser = "foo";
+    String mappedPassword = "bar";
+
+    return Map.of(
+        "app.sftp.host", mappedHost,
+        "app.sftp.port", mappedPort,
+        "app.sftp.user", mappedUser,
+        "app.sftp.password", mappedPassword
+    );
+  }
+
+  @Override
+  public void stop() {
+    sftp.stop();
+  }
+}
+```
+
+Annotate `SftpResourceTest` with `@QuarkusTestResource` and run it again
+
+```
+@QuarkusTestResource(SftpTestResource.class)
+```
+
+Now by the nature of `TestResource` it is started before every other `@QuarkusTest` is executed, let's demo on another test.
+
+```
+import io.quarkus.test.junit.QuarkusTest;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+
+@QuarkusTest
+public class DummyTest {
+  @Test
+  void doNothing() {
+    assertThat(List.of()).isEmpty();
+  }
+}
+```
+
+To solve this (and some other) problems add `QuarkusTestProfile` to isolate test resource configurations
+
+```
+import io.quarkus.test.junit.QuarkusTestProfile;
+
+import java.util.List;
+
+public class SftpTestProfile implements QuarkusTestProfile {
+  @Override
+  public List<TestResourceEntry> testResources() {
+    return List.of(new TestResourceEntry(SftpTestResource.class));
+  }
+}
+```
 
 ####
 
